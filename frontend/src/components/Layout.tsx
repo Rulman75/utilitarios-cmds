@@ -7,7 +7,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [userData, setUserData] = useState({ username: 'admin', unidad: 'DAF', tipo: 'A' });
-  const [openDistribucion, setOpenDistribucion] = useState(true);
+  const [openDistribucion, setOpenDistribucion] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
