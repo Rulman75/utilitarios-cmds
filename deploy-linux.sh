@@ -59,7 +59,7 @@ else
   echo "[3/4] Archivo backend/.env ya existe, conservando configuración actual."
 fi
 
-# 4. Iniciar o reiniciar proceso en PM2
+# 4. Iniciar o reiniciar proceso en PM2 y abrir puerto en Firewall
 echo "[4/4] Configurando proceso '$PM2_NAME' en PM2 (Puerto $PORT)..."
 if pm2 describe "$PM2_NAME" > /dev/null 2>&1; then
   pm2 restart "$PM2_NAME" --update-env
@@ -68,6 +68,10 @@ else
   pm2 start server.js --name "$PM2_NAME"
 fi
 pm2 save
+
+if command -v ufw > /dev/null 2>&1; then
+  sudo ufw allow ${PORT}/tcp > /dev/null 2>&1 || true
+fi
 
 echo "=================================================================="
 echo "  Despliegue completado exitosamente."
