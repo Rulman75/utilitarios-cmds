@@ -8,6 +8,7 @@ export default function Layout() {
   const location = useLocation();
   const [userData, setUserData] = useState({ username: 'admin', unidad: 'DAF', tipo: 'A' });
   const [openDistribucion, setOpenDistribucion] = useState(false);
+  const [openResumenRentas, setOpenResumenRentas] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -36,6 +37,7 @@ export default function Layout() {
   const isDistribucionRoute = ['/inicio', '/procesar', '/informes', '/correo', '/historial', '/mantenedores'].includes(
     location.pathname
   );
+  const isResumenRentasRoute = location.pathname.startsWith('/resumen-rentas');
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-[#f4f7f6] font-sans text-[#1e293b] print:bg-white print:h-auto">
@@ -231,6 +233,102 @@ export default function Layout() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
                     <span>Mantenedor Cencos y Reglas</span>
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            {/* UTILITARIO 2: Resumen de Rentas */}
+            <div className="rounded-xl bg-black/10 border border-white/10 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenResumenRentas(!openResumenRentas)}
+                className={`w-full flex items-center justify-between py-2.5 px-3 text-left font-bold transition-colors cursor-pointer ${
+                  isResumenRentasRoute
+                    ? 'bg-white/15 text-white'
+                    : 'text-white/90 hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <svg className="w-4 h-4 shrink-0 text-[#39BABD]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+                    />
+                  </svg>
+                  <span className="text-[13px] leading-tight">Resumen de Rentas</span>
+                </div>
+                <svg
+                  className={`w-4 h-4 shrink-0 text-blue-200 transition-transform duration-200 ${
+                    openResumenRentas ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {openResumenRentas && (
+                <div className="p-1.5 space-y-1 border-t border-white/10 bg-[#015282]/60">
+                  <Link
+                    to="/resumen-rentas/inicio"
+                    className={`flex items-center gap-2.5 py-2 px-3 rounded-lg transition-colors text-xs font-semibold ${
+                      isActive('/resumen-rentas/inicio')
+                        ? 'bg-[#39BABD] text-white shadow-sm'
+                        : 'text-blue-50/90 hover:bg-white/10'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                      />
+                    </svg>
+                    <span>Dashboard y Trimestres</span>
+                  </Link>
+
+                  <Link
+                    to="/resumen-rentas/procesar"
+                    className={`flex items-center gap-2.5 py-2 px-3 rounded-lg transition-colors text-xs font-semibold ${
+                      isActive('/resumen-rentas/procesar')
+                        ? 'bg-[#39BABD] text-white shadow-sm'
+                        : 'text-blue-50/90 hover:bg-white/10'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                      />
+                    </svg>
+                    <span>Procesar Mes (Personal + Renta)</span>
+                  </Link>
+
+                  <Link
+                    to="/resumen-rentas/historial"
+                    className={`flex items-center gap-2.5 py-2 px-3 rounded-lg transition-colors text-xs font-semibold ${
+                      isActive('/resumen-rentas/historial')
+                        ? 'bg-[#39BABD] text-white shadow-sm'
+                        : 'text-blue-50/90 hover:bg-white/10'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+                      />
+                    </svg>
+                    <span>Historial y Descargas .ZIP</span>
                   </Link>
                 </div>
               )}

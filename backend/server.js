@@ -15,6 +15,15 @@ const {
   buildBaseDepuradaExcelBuffer,
   stripHeavyDetailsForStorage
 } = require('./services/processor');
+const {
+  CONSULTAS_DEF,
+  processResumenRentas,
+  buildConsultaExcelBuffer,
+  buildPersonalDepuradoExcelBuffer,
+  buildRentaDepurada6ColExcelBuffer,
+  buildResumenMensualZipBuffer,
+  createZipBuffer
+} = require('./services/resumenRentasProcessor');
 
 const app = express();
 app.use(cors());
@@ -28,6 +37,7 @@ const upload = multer({
 
 // Caché en memoria de la última sesión procesada (incluye los 44.462 registros detallados para drill-down y descarga de 3 hojas)
 let lastProcessedSession = null;
+let lastResumenRentasSession = null;
 
 // Servir frontend compilado
 const publicDir = path.join(__dirname, 'public');
@@ -838,6 +848,441 @@ app.post('/api/correo/enviar', async (req, res) => {
   } catch (e) {
     console.error('[EnviarCorreo] Error:', e);
     res.status(500).json({ status: 'error', error: `Error al enviar correo: ${e.message}` });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 9. UTILITARIO 2: RESUMEN DE RENTAS (TRIMESTRAL / MENSUAL)
+// ---------------------------------------------------------------------------
+function mapProcessedToDbRecord(processed, zipBuffer, usuario = 'admin') {
+  const byKey = {};
+  for (const c of processed.resumenConsultas) {
+    byKey[c.key] = c;
+  }
+  return {
+    anio: processed.meta.anio,
+    mes: processed.meta.mes,
+    trimestre: processed.meta.trimestre,
+    personal_archivo: processed.meta.personalArchivo,
+    renta_archivo: processed.meta.rentaArchivo,
+    personal_filas: processed.meta.personalFilasValidas,
+    renta_filas_validas: processed.meta.rentaFilasValidas,
+    filas_docentes: byKey.Docentes?.filas || 0,
+    monto_docentes: byKey.Docentes?.montoTotal || 0,
+    filas_nodocentes: byKey.NoDocentes?.filas || 0,
+    monto_nodocentes: byKey.NoDocentes?.montoTotal || 0,
+    filas_salud_600_607: byKey.Salud_600al607?.filas || 0,
+    monto_salud_600_607: byKey.Salud_600al607?.montoTotal || 0,
+    filas_salud_608_609: byKey.Salud_608al609?.filas || 0,
+    monto_salud_608_609: byKey.Salud_608al609?.montoTotal || 0,
+    filas_salud_610: byKey.Salud_610?.filas || 0,
+    monto_salud_610: byKey.Salud_610?.montoTotal || 0,
+    filas_salud_620: byKey.Salud_620?.filas || 0,
+    monto_salud_620: byKey.Salud_620?.montoTotal || 0,
+    total_educacion: processed.meta.totalMontoEducacion,
+    total_salud: processed.meta.totalMontoSalud,
+    total_general: processed.meta.totalMontoGeneral,
+    resumen_json: {
+      meta: processed.meta,
+      resumenConsultas: processed.resumenConsultas
+    },
+    zip_base64: zipBuffer ? zipBuffer.toString('base64') : null,
+    usuario
+  };
+}
+
+app.get('/api/resumen-rentas/stats', async (req, res) => {
+  try {
+    const yearFilter = req.query.year ? Number(req.query.year) : null;
+    const allPeriodos = await db.getResumenRentaPeriodos();
+    const filtered = yearFilter
+      ? allPeriodos.filter(p => Number(p.anio) === yearFilter)
+      : allPeriodos;
+
+    const totalEducacion = filtered.reduce((acc, p) => acc + Number(p.total_educacion || 0), 0);
+    const totalSalud = filtered.reduce((acc, p) => acc + Number(p.total_salud || 0), 0);
+    const totalGeneral = totalEducacion + totalSalud;
+    const totalDocentes = filtered.reduce((acc, p) => acc + Number(p.monto_docentes || 0), 0);
+    const totalNoDocentes = filtered.reduce((acc, p) => acc + Number(p.monto_nodocentes || 0), 0);
+    const totalSalud600 = filtered.reduce((acc, p) => acc + Number(p.monto_salud_600_607 || 0), 0);
+    const totalSalud608 = filtered.reduce((acc, p) => acc + Number(p.monto_salud_608_609 || 0), 0);
+    const totalSalud610 = filtered.reduce((acc, p) => acc + Number(p.monto_salud_610 || 0), 0);
+    const totalSalud620 = filtered.reduce((acc, p) => acc + Number(p.monto_salud_620 || 0), 0);
+
+    // Agrupar por Trimestre
+    const trimestresMap = new Map();
+    for (const p of filtered) {
+      const key = `${p.anio}-Q${p.trimestre}`;
+      if (!trimestresMap.has(key)) {
+        trimestresMap.set(key, {
+          anio: p.anio,
+          trimestre: p.trimestre,
+          label: `Trimestre ${p.trimestre} (${p.anio})`,
+          mesesProcesados: 0,
+          mesesLista: [],
+          montoEducacion: 0,
+          montoSalud: 0,
+          montoTotal: 0
+        });
+      }
+      const t = trimestresMap.get(key);
+      t.mesesProcesados++;
+      t.mesesLista.push(MESES_NOMBRES[p.mes] || String(p.mes));
+      t.montoEducacion += Number(p.total_educacion || 0);
+      t.montoSalud += Number(p.total_salud || 0);
+      t.montoTotal += Number(p.total_general || 0);
+    }
+
+    const evolucion = [...filtered]
+      .sort((a, b) => (a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes))
+      .map(p => ({
+        periodo: `${(MESES_NOMBRES[p.mes] || String(p.mes)).slice(0, 3)} ${p.anio}`,
+        anio: p.anio,
+        mes: p.mes,
+        mesNombre: MESES_NOMBRES[p.mes] || String(p.mes),
+        Docentes: Number(p.monto_docentes || 0),
+        NoDocentes: Number(p.monto_nodocentes || 0),
+        Salud600_607: Number(p.monto_salud_600_607 || 0),
+        Salud608_609: Number(p.monto_salud_608_609 || 0),
+        Salud610: Number(p.monto_salud_610 || 0),
+        Salud620: Number(p.monto_salud_620 || 0),
+        Educacion: Number(p.total_educacion || 0),
+        Salud: Number(p.total_salud || 0),
+        Total: Number(p.total_general || 0)
+      }));
+
+    res.json({
+      status: 'ok',
+      data: {
+        totalPeriodos: filtered.length,
+        totalEducacion,
+        totalSalud,
+        totalGeneral,
+        desgloseGlobal: {
+          Docentes: totalDocentes,
+          NoDocentes: totalNoDocentes,
+          Salud_600al607: totalSalud600,
+          Salud_608al609: totalSalud608,
+          Salud_610: totalSalud610,
+          Salud_620: totalSalud620
+        },
+        trimestres: Array.from(trimestresMap.values()).sort(
+          (a, b) => (b.anio !== a.anio ? b.anio - a.anio : b.trimestre - a.trimestre)
+        ),
+        evolucion,
+        periodos: filtered.map(p => ({
+          ...p,
+          mesNombre: MESES_NOMBRES[p.mes] || String(p.mes),
+          zipFileName: `${String(p.mes).padStart(2, '0')}_${p.anio}.zip`
+        }))
+      }
+    });
+  } catch (e) {
+    console.error('[ResumenRentas Stats] Error:', e);
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+app.get('/api/resumen-rentas/periodos', async (req, res) => {
+  try {
+    const list = await db.getResumenRentaPeriodos();
+    res.json({
+      status: 'ok',
+      periodos: list.map(p => ({
+        ...p,
+        mesNombre: MESES_NOMBRES[p.mes] || String(p.mes),
+        zipFileName: `${String(p.mes).padStart(2, '0')}_${p.anio}.zip`
+      }))
+    });
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+app.delete('/api/resumen-rentas/periodos/:anio/:mes', async (req, res) => {
+  try {
+    await db.deleteResumenRentaPeriodo(req.params.anio, req.params.mes);
+    res.json({ status: 'ok', message: 'Período eliminado correctamente' });
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+app.post(
+  '/api/resumen-rentas/previsualizar',
+  upload.fields([
+    { name: 'personal', maxCount: 1 },
+    { name: 'renta', maxCount: 1 }
+  ]),
+  async (req, res) => {
+    try {
+      const persFile = req.files?.personal?.[0];
+      const rentaFile = req.files?.renta?.[0];
+      if (!persFile || !rentaFile) {
+        return res.status(400).json({
+          status: 'error',
+          error: 'Debe adjuntar ambos archivos del mes: la planilla de Personal y la planilla de Renta.'
+        });
+      }
+
+      const anio = req.body.anio ? Number(req.body.anio) : new Date().getFullYear();
+      const mes = req.body.mes ? Number(req.body.mes) : 9;
+
+      const processed = processResumenRentas(persFile.buffer, rentaFile.buffer, {
+        anio,
+        mes,
+        personalFileName: persFile.originalname,
+        rentaFileName: rentaFile.originalname
+      });
+
+      lastResumenRentasSession = processed;
+      const existente = await db.getResumenRentaDetalle(anio, mes);
+
+      const muestrasConsultas = {};
+      for (const def of CONSULTAS_DEF) {
+        muestrasConsultas[def.key] = (processed.consultas[def.key] || []).slice(0, 60);
+      }
+
+      res.json({
+        status: 'ok',
+        periodoYaExiste: Boolean(existente),
+        meta: processed.meta,
+        resumenConsultas: processed.resumenConsultas,
+        muestrasConsultas,
+        muestraPersonalDepurado: processed.personalDepurado.slice(0, 50),
+        muestraRentaDepurada: processed.rentaDepurada.slice(0, 50)
+      });
+    } catch (e) {
+      console.error('[ResumenRentas Previsualizar] Error:', e);
+      res.status(400).json({ status: 'error', error: e.message });
+    }
+  }
+);
+
+app.post(
+  '/api/resumen-rentas/guardar',
+  upload.fields([
+    { name: 'personal', maxCount: 1 },
+    { name: 'renta', maxCount: 1 }
+  ]),
+  async (req, res) => {
+    try {
+      let processed = lastResumenRentasSession;
+      const persFile = req.files?.personal?.[0];
+      const rentaFile = req.files?.renta?.[0];
+
+      if (persFile && rentaFile) {
+        const anio = req.body.anio ? Number(req.body.anio) : new Date().getFullYear();
+        const mes = req.body.mes ? Number(req.body.mes) : 9;
+        processed = processResumenRentas(persFile.buffer, rentaFile.buffer, {
+          anio,
+          mes,
+          personalFileName: persFile.originalname,
+          rentaFileName: rentaFile.originalname
+        });
+        lastResumenRentasSession = processed;
+      }
+
+      if (!processed) {
+        return res.status(400).json({
+          status: 'error',
+          error: 'No hay un Resumen de Rentas activo en memoria. Suba y previsualice los archivos primero.'
+        });
+      }
+
+      const zipBuf = buildResumenMensualZipBuffer(processed);
+      const record = mapProcessedToDbRecord(processed, zipBuf, req.body.usuario || 'admin');
+      await db.saveResumenRentaPeriodo(record);
+
+      res.json({
+        status: 'ok',
+        message: `Resumen de Rentas de ${processed.meta.mesNombre} ${processed.meta.anio} (${processed.meta.zipFileName}) guardado en PostgreSQL.`
+      });
+    } catch (e) {
+      console.error('[ResumenRentas Guardar] Error:', e);
+      res.status(500).json({ status: 'error', error: e.message });
+    }
+  }
+);
+
+// Descargar el archivo MM_YYYY.zip de un mes (desde memoria o desde PostgreSQL)
+app.get('/api/resumen-rentas/descargar-zip/:anio/:mes', async (req, res) => {
+  try {
+    const anio = Number(req.params.anio);
+    const mes = Number(req.params.mes);
+    const zipFileName = `${String(mes).padStart(2, '0')}_${anio}.zip`;
+
+    if (
+      lastResumenRentasSession &&
+      Number(lastResumenRentasSession.meta.anio) === anio &&
+      Number(lastResumenRentasSession.meta.mes) === mes
+    ) {
+      const zipBuf = buildResumenMensualZipBuffer(lastResumenRentasSession);
+      res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+      res.setHeader('Content-Type', 'application/zip');
+      return res.send(zipBuf);
+    }
+
+    const det = await db.getResumenRentaDetalle(anio, mes);
+    if (det && det.zip_base64) {
+      const zipBuf = Buffer.from(det.zip_base64, 'base64');
+      res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+      res.setHeader('Content-Type', 'application/zip');
+      return res.send(zipBuf);
+    }
+
+    res.status(404).json({ status: 'error', error: `No se encontró el archivo ${zipFileName} en la base de datos.` });
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+// Descargar el Pack Trimestral (contiene los 3 archivos MM_YYYY.zip del trimestre seleccionado)
+app.get('/api/resumen-rentas/descargar-trimestre/:anio/:trimestre', async (req, res) => {
+  try {
+    const anio = Number(req.params.anio);
+    const trimestre = Number(req.params.trimestre);
+    const mesesTrimestre = [
+      (trimestre - 1) * 3 + 1,
+      (trimestre - 1) * 3 + 2,
+      (trimestre - 1) * 3 + 3
+    ];
+
+    const entries = [];
+    for (const m of mesesTrimestre) {
+      const det = await db.getResumenRentaDetalle(anio, m);
+      if (det && det.zip_base64) {
+        entries.push({
+          name: `${String(m).padStart(2, '0')}_${anio}.zip`,
+          data: Buffer.from(det.zip_base64, 'base64')
+        });
+      }
+    }
+
+    if (entries.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        error: `No hay meses procesados para el Trimestre ${trimestre} del año ${anio}.`
+      });
+    }
+
+    const packZip = createZipBuffer(entries);
+    const packName = `Resumen_Rentas_Trimestre_Q${trimestre}_${anio}.zip`;
+    res.setHeader('Content-Disposition', `attachment; filename="${packName}"`);
+    res.setHeader('Content-Type', 'application/zip');
+    return res.send(packZip);
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+// Descargar una consulta individual .xlsx o las planillas recortadas de Personal (8 col) / Renta (6 col)
+app.get('/api/resumen-rentas/descargar-consulta/:tipo', async (req, res) => {
+  try {
+    if (!lastResumenRentasSession) {
+      return res.status(400).json({
+        status: 'error',
+        error: 'Para descargar un archivo individual, previsualice el mes o descargue el paquete .zip completo desde el Historial.'
+      });
+    }
+    const { tipo } = req.params;
+    const mesNom = (lastResumenRentasSession.meta.mesNombre || 'mes').toLowerCase();
+    const anioNum = lastResumenRentasSession.meta.anio;
+
+    if (tipo === 'personal-depurado') {
+      const buf = buildPersonalDepuradoExcelBuffer(lastResumenRentasSession.personalDepurado);
+      const fname = `${mesNom} ${anioNum} personal 2.xlsx`;
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"`);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      return res.send(buf);
+    }
+
+    if (tipo === 'renta-depurada') {
+      const buf = buildRentaDepurada6ColExcelBuffer(lastResumenRentasSession.rentaDepurada);
+      const fname = `${mesNom} ${anioNum} renta 2.xlsx`;
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"`);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      return res.send(buf);
+    }
+
+    const def = CONSULTAS_DEF.find(c => c.key === tipo);
+    if (!def) {
+      return res.status(400).json({ status: 'error', error: 'Consulta solicitada no válida' });
+    }
+
+    const rows = lastResumenRentasSession.consultas[def.key] || [];
+    const buf = buildConsultaExcelBuffer(rows, def.sheetName);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(def.fileName)}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    return res.send(buf);
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
+});
+
+// Importador masivo desde carpeta C:\Users\rhormazabal\Desktop\CMDS\DAF\RESUMEN DE RENTAS\2026
+app.post('/api/resumen-rentas/importar-carpeta-local', async (req, res) => {
+  try {
+    const baseFolder = 'C:/Users/rhormazabal/Desktop/CMDS/DAF/RESUMEN DE RENTAS';
+    const yearToScan = Number(req.body?.anio || 2026);
+    const yearFolder = path.join(baseFolder, String(yearToScan));
+
+    if (!fs.existsSync(yearFolder)) {
+      return res.status(404).json({
+        status: 'error',
+        error: `No se encontró la carpeta local ${yearFolder} en este equipo.`
+      });
+    }
+
+    const subdirs = fs.readdirSync(yearFolder);
+    const importados = [];
+
+    for (const sub of subdirs) {
+      const fullSub = path.join(yearFolder, sub);
+      if (!fs.statSync(fullSub).isDirectory()) continue;
+
+      const mesMatch = sub.match(/^(\d{1,2})/);
+      if (!mesMatch) continue;
+      const mesNum = parseInt(mesMatch[1], 10);
+
+      const files = fs.readdirSync(fullSub).filter(f => !f.startsWith('~$'));
+      const persFile = files.find(f => /personal/i.test(f) && /\.(xlsx|xls|csv)$/i.test(f));
+      const rentaFile = files.find(f => /renta/i.test(f) && /\.(xlsx|xls|csv)$/i.test(f));
+      if (!persFile || !rentaFile) continue;
+
+      const persBuf = fs.readFileSync(path.join(fullSub, persFile));
+      const rentaBuf = fs.readFileSync(path.join(fullSub, rentaFile));
+
+      const processed = processResumenRentas(persBuf, rentaBuf, {
+        anio: yearToScan,
+        mes: mesNum,
+        personalFileName: persFile,
+        rentaFileName: rentaFile
+      });
+
+      const zipBuf = buildResumenMensualZipBuffer(processed);
+      const record = mapProcessedToDbRecord(processed, zipBuf, 'sincronizacion-historica');
+      await db.saveResumenRentaPeriodo(record);
+
+      lastResumenRentasSession = processed;
+      importados.push({
+        anio: yearToScan,
+        mes: mesNum,
+        mesNombre: processed.meta.mesNombre,
+        zipFileName: processed.meta.zipFileName,
+        totalFilas: processed.meta.totalFilasConsultas,
+        totalGeneral: processed.meta.totalMontoGeneral
+      });
+    }
+
+    res.json({
+      status: 'ok',
+      message: `Se procesaron e importaron ${importados.length} meses del año ${yearToScan} exitosamente a PostgreSQL.`,
+      importados
+    });
+  } catch (e) {
+    console.error('[ImportarResumenRentas] Error:', e);
+    res.status(500).json({ status: 'error', error: e.message });
   }
 });
 

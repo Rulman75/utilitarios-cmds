@@ -8,6 +8,9 @@ import { VisorInformes } from './pages/VisorInformes';
 import { DespachoCorreo } from './pages/DespachoCorreo';
 import { HistorialPeriodos } from './pages/HistorialPeriodos';
 import { MantenedorCencos } from './pages/MantenedorCencos';
+import { ResumenRentasInicio } from './pages/ResumenRentasInicio';
+import { ResumenRentasProcesar } from './pages/ResumenRentasProcesar';
+import ResumenRentasHistorial from './pages/ResumenRentasHistorial';
 
 export default function App() {
   return (
@@ -22,6 +25,9 @@ export default function App() {
           <Route path="correo" element={<DespachoCorreo />} />
           <Route path="historial" element={<HistorialPeriodos />} />
           <Route path="mantenedores" element={<MantenedorCencos />} />
+          <Route path="resumen-rentas/inicio" element={<ResumenRentasInicio />} />
+          <Route path="resumen-rentas/procesar" element={<ResumenRentasProcesar />} />
+          <Route path="resumen-rentas/historial" element={<ResumenRentasHistorial />} />
         </Route>
         <Route path="*" element={<Navigate to="/inicio" replace />} />
       </Routes>

@@ -235,6 +235,37 @@ async function initDatabase() {
         smtp_secure BOOLEAN DEFAULT FALSE,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS resumen_rentas_periodos (
+        id SERIAL PRIMARY KEY,
+        anio INT NOT NULL,
+        mes INT NOT NULL,
+        trimestre INT NOT NULL,
+        personal_archivo VARCHAR(255),
+        renta_archivo VARCHAR(255),
+        personal_filas INT DEFAULT 0,
+        renta_filas_validas INT DEFAULT 0,
+        filas_docentes INT DEFAULT 0,
+        monto_docentes BIGINT DEFAULT 0,
+        filas_nodocentes INT DEFAULT 0,
+        monto_nodocentes BIGINT DEFAULT 0,
+        filas_salud_600_607 INT DEFAULT 0,
+        monto_salud_600_607 BIGINT DEFAULT 0,
+        filas_salud_608_609 INT DEFAULT 0,
+        monto_salud_608_609 BIGINT DEFAULT 0,
+        filas_salud_610 INT DEFAULT 0,
+        monto_salud_610 BIGINT DEFAULT 0,
+        filas_salud_620 INT DEFAULT 0,
+        monto_salud_620 BIGINT DEFAULT 0,
+        total_educacion BIGINT DEFAULT 0,
+        total_salud BIGINT DEFAULT 0,
+        total_general BIGINT DEFAULT 0,
+        resumen_json JSONB,
+        zip_base64 TEXT,
+        usuario VARCHAR(100) DEFAULT 'admin',
+        fecha_proceso TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(anio, mes)
+      );
     `);
 
     // Sembrar Cencos si la tabla está vacía
@@ -648,6 +679,162 @@ async function saveConfigCorreo(cfg) {
   return updated;
 }
 
+// ---------------------------------------------------------------------------
+// MÓDULO 2: RESUMEN DE RENTAS (TRIMESTRAL / MENSUAL)
+// ---------------------------------------------------------------------------
+async function saveResumenRentaPeriodo(item) {
+  const pool = await getPgPool();
+  if (pool) {
+    try {
+      await pool.query(
+        `INSERT INTO resumen_rentas_periodos (
+          anio, mes, trimestre, personal_archivo, renta_archivo,
+          personal_filas, renta_filas_validas,
+          filas_docentes, monto_docentes,
+          filas_nodocentes, monto_nodocentes,
+          filas_salud_600_607, monto_salud_600_607,
+          filas_salud_608_609, monto_salud_608_609,
+          filas_salud_610, monto_salud_610,
+          filas_salud_620, monto_salud_620,
+          total_educacion, total_salud, total_general,
+          resumen_json, zip_base64, usuario, fecha_proceso
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (anio, mes) DO UPDATE SET
+          trimestre = EXCLUDED.trimestre,
+          personal_archivo = EXCLUDED.personal_archivo,
+          renta_archivo = EXCLUDED.renta_archivo,
+          personal_filas = EXCLUDED.personal_filas,
+          renta_filas_validas = EXCLUDED.renta_filas_validas,
+          filas_docentes = EXCLUDED.filas_docentes,
+          monto_docentes = EXCLUDED.monto_docentes,
+          filas_nodocentes = EXCLUDED.filas_nodocentes,
+          monto_nodocentes = EXCLUDED.monto_nodocentes,
+          filas_salud_600_607 = EXCLUDED.filas_salud_600_607,
+          monto_salud_600_607 = EXCLUDED.monto_salud_600_607,
+          filas_salud_608_609 = EXCLUDED.filas_salud_608_609,
+          monto_salud_608_609 = EXCLUDED.monto_salud_608_609,
+          filas_salud_610 = EXCLUDED.filas_salud_610,
+          monto_salud_610 = EXCLUDED.monto_salud_610,
+          filas_salud_620 = EXCLUDED.filas_salud_620,
+          monto_salud_620 = EXCLUDED.monto_salud_620,
+          total_educacion = EXCLUDED.total_educacion,
+          total_salud = EXCLUDED.total_salud,
+          total_general = EXCLUDED.total_general,
+          resumen_json = EXCLUDED.resumen_json,
+          zip_base64 = EXCLUDED.zip_base64,
+          usuario = EXCLUDED.usuario,
+          fecha_proceso = CURRENT_TIMESTAMP`,
+        [
+          item.anio,
+          item.mes,
+          item.trimestre,
+          item.personal_archivo,
+          item.renta_archivo,
+          item.personal_filas,
+          item.renta_filas_validas,
+          item.filas_docentes,
+          item.monto_docentes,
+          item.filas_nodocentes,
+          item.monto_nodocentes,
+          item.filas_salud_600_607,
+          item.monto_salud_600_607,
+          item.filas_salud_608_609,
+          item.monto_salud_608_609,
+          item.filas_salud_610,
+          item.monto_salud_610,
+          item.filas_salud_620,
+          item.monto_salud_620,
+          item.total_educacion,
+          item.total_salud,
+          item.total_general,
+          JSON.stringify(item.resumen_json || {}),
+          item.zip_base64 || null,
+          item.usuario || 'admin'
+        ]
+      );
+    } catch (e) {
+      console.warn('[DB] saveResumenRentaPeriodo PG warning:', e.message);
+    }
+  }
+
+  const store = readLocalStore();
+  if (!Array.isArray(store.resumen_rentas_periodos)) store.resumen_rentas_periodos = [];
+  const idx = store.resumen_rentas_periodos.findIndex(
+    p => Number(p.anio) === Number(item.anio) && Number(p.mes) === Number(item.mes)
+  );
+  const { zip_base64, ...lightItem } = item;
+  const record = { ...lightItem, fecha_proceso: new Date().toISOString() };
+  if (idx >= 0) store.resumen_rentas_periodos[idx] = record;
+  else store.resumen_rentas_periodos.push(record);
+  store.resumen_rentas_periodos.sort((a, b) => (b.anio !== a.anio ? b.anio - a.anio : b.mes - a.mes));
+  writeLocalStore(store);
+  return record;
+}
+
+async function getResumenRentaPeriodos() {
+  const pool = await getPgPool();
+  if (pool) {
+    try {
+      const res = await pool.query(
+        `SELECT id, anio, mes, trimestre, personal_archivo, renta_archivo,
+                personal_filas, renta_filas_validas,
+                filas_docentes, monto_docentes,
+                filas_nodocentes, monto_nodocentes,
+                filas_salud_600_607, monto_salud_600_607,
+                filas_salud_608_609, monto_salud_608_609,
+                filas_salud_610, monto_salud_610,
+                filas_salud_620, monto_salud_620,
+                total_educacion, total_salud, total_general,
+                resumen_json, usuario, fecha_proceso
+         FROM resumen_rentas_periodos
+         ORDER BY anio DESC, mes DESC`
+      );
+      return res.rows;
+    } catch (e) {
+      console.warn('[DB] getResumenRentaPeriodos fallback local:', e.message);
+    }
+  }
+  const store = readLocalStore();
+  return store.resumen_rentas_periodos || [];
+}
+
+async function getResumenRentaDetalle(anio, mes) {
+  const aNum = Number(anio);
+  const mNum = Number(mes);
+  const pool = await getPgPool();
+  if (pool) {
+    try {
+      const res = await pool.query(
+        'SELECT * FROM resumen_rentas_periodos WHERE anio = $1 AND mes = $2 LIMIT 1',
+        [aNum, mNum]
+      );
+      if (res.rows.length > 0) return res.rows[0];
+    } catch (e) {
+      console.warn('[DB] getResumenRentaDetalle fallback local:', e.message);
+    }
+  }
+  const store = readLocalStore();
+  return (store.resumen_rentas_periodos || []).find(
+    p => Number(p.anio) === aNum && Number(p.mes) === mNum
+  ) || null;
+}
+
+async function deleteResumenRentaPeriodo(anio, mes) {
+  const aNum = Number(anio);
+  const mNum = Number(mes);
+  const pool = await getPgPool();
+  if (pool) {
+    await pool.query('DELETE FROM resumen_rentas_periodos WHERE anio = $1 AND mes = $2', [aNum, mNum]);
+  }
+  const store = readLocalStore();
+  store.resumen_rentas_periodos = (store.resumen_rentas_periodos || []).filter(
+    p => !(Number(p.anio) === aNum && Number(p.mes) === mNum)
+  );
+  writeLocalStore(store);
+}
+
 module.exports = {
   initDatabase,
   getPgPool,
@@ -664,6 +851,10 @@ module.exports = {
   deletePeriodo,
   getConfigCorreo,
   saveConfigCorreo,
+  saveResumenRentaPeriodo,
+  getResumenRentaPeriodos,
+  getResumenRentaDetalle,
+  deleteResumenRentaPeriodo,
   INITIAL_CENCOS,
   INITIAL_HABERES_EXCLUIDOS
 };
