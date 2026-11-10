@@ -1,0 +1,13 @@
+{
+  "name": "utilitarios-cmds",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma de Utilitarios TI CMDS - Corporación Municipal de Desarrollo Social de Antofagasta",
+  "scripts": {
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start",
+    "release:patch": "node scripts/release.js patch",
+    "release:minor": "node scripts/release.js minor",
+    "release:major": "node scripts/release.js major"
+  }
+}
